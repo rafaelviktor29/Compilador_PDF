@@ -2,7 +2,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, Listbox, Scrollbar
 from pypdf import PdfWriter
 import os
-
+import threading
 
 class PDFMergerApp(ctk.CTk):
     def __init__(self):
@@ -12,16 +12,12 @@ class PDFMergerApp(ctk.CTk):
         self.title("Compilador de PDF")
         self.geometry("600x500")
         
-        # Define o tema (System, Dark, Light)
         ctk.set_appearance_mode("System")
-        # Define o tema de cores dos widgets
         ctk.set_default_color_theme("blue")
 
-        # Armazena os caminhos completos dos arquivos na ordem correta
         self.file_paths = []
 
         # --- Configuração do Layout em Grid ---
-        # A coluna 0 e a linha 1 vão se expandir para preencher o espaço
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         
@@ -41,9 +37,11 @@ class PDFMergerApp(ctk.CTk):
         self.btn_down = ctk.CTkButton(control_frame, text="Mover p/ Baixo", command=self.move_down)
         self.btn_down.pack(side="left", padx=5, pady=5)
         
+        # <--- NOVO: Botão para limpar a lista ---
+        self.btn_clear = ctk.CTkButton(control_frame, text="Limpar Lista", command=self.clear_list, fg_color="#D32F2F", hover_color="#B71C1C")
+        self.btn_clear.pack(side="left", padx=5, pady=5)
+        
         # --- Frame da Lista de Arquivos ---
-        # CustomTkinter ainda não tem um widget Listbox, então uso do Tkinter padrão
-        # e o estilizamos para combinar com o tema escuro/claro.
         list_frame = ctk.CTkFrame(self)
         list_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
         list_frame.grid_columnconfigure(0, weight=1)
@@ -52,16 +50,15 @@ class PDFMergerApp(ctk.CTk):
         self.listbox = Listbox(
             list_frame, 
             selectmode="single", 
-            bg="#2D2D2D",  # Cor de fundo para tema escuro
-            fg="white",  # Cor do texto para tema escuro
-            selectbackground="#1F6AA5",  # Cor de fundo do item selecionado
+            bg="#2D2D2D",
+            fg="white",
+            selectbackground="#1F6AA5",
             borderwidth=0, 
             highlightthickness=0,
             font=("Arial", 12)
         )
         self.listbox.grid(row=0, column=0, sticky="nsew")
 
-        # Barra de rolagem para a lista
         scrollbar = Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.listbox.config(yscrollcommand=scrollbar.set)
@@ -71,7 +68,7 @@ class PDFMergerApp(ctk.CTk):
             self, 
             text="Compilar PDFs e Salvar", 
             font=("Arial", 14, "bold"), 
-            command=self.merge_pdfs
+            command=self.start_merge_thread  # Chama a função que inicia a thread
         )
         self.btn_compile.grid(row=2, column=0, padx=10, pady=10, sticky="ew", ipady=5)
 
@@ -79,7 +76,6 @@ class PDFMergerApp(ctk.CTk):
         """Limpa e atualiza a lista de exibição com os nomes dos arquivos."""
         self.listbox.delete(0, "end")
         for path in self.file_paths:
-            # Mostra apenas o nome do arquivo, não o caminho completo, para uma UI mais limpa
             self.listbox.insert("end", os.path.basename(path))
 
     def select_files(self):
@@ -89,7 +85,6 @@ class PDFMergerApp(ctk.CTk):
             filetypes=[("Arquivos PDF", "*.pdf")]
         )
         if files:
-            # Adiciona os novos arquivos à lista de caminhos
             self.file_paths.extend(list(files))
             self.update_listbox()
 
@@ -100,12 +95,8 @@ class PDFMergerApp(ctk.CTk):
             messagebox.showwarning("Aviso", "Nenhum arquivo selecionado para remover.")
             return
         
-        # O índice do item selecionado
         index = selected_indices[0]
-        
-        # Remove o caminho do arquivo da nossa lista de dados
         self.file_paths.pop(index)
-        
         self.update_listbox()
 
     def move_up(self):
@@ -116,16 +107,11 @@ class PDFMergerApp(ctk.CTk):
             return
 
         pos = selected_indices[0]
-        # Não pode mover se já for o primeiro
         if pos == 0:
             return
 
-        # Troca o item com o item anterior na lista de caminhos
         self.file_paths[pos], self.file_paths[pos - 1] = self.file_paths[pos - 1], self.file_paths[pos]
-        
         self.update_listbox()
-        
-        # Mantém a seleção no item que foi movido
         self.listbox.select_set(pos - 1)
         self.listbox.activate(pos - 1)
 
@@ -137,52 +123,82 @@ class PDFMergerApp(ctk.CTk):
             return
             
         pos = selected_indices[0]
-        # Não pode mover se já for o último
         if pos == len(self.file_paths) - 1:
             return
 
-        # Troca o item com o item seguinte na lista de caminhos
         self.file_paths[pos], self.file_paths[pos + 1] = self.file_paths[pos + 1], self.file_paths[pos]
-        
         self.update_listbox()
-        
-        # Mantém a seleção no item que foi movido
         self.listbox.select_set(pos + 1)
         self.listbox.activate(pos + 1)
 
-    def merge_pdfs(self):
-        """Pega todos os arquivos da lista, compila-os e pede ao usuário para salvar."""
+    # Função para limpar a lista
+    def clear_list(self):
+        """Limpa todos os arquivos da lista."""
+        # Pede confirmação ao usuário
+        if messagebox.askyesno("Confirmar", "Tem certeza que deseja limpar a lista de arquivos?"):
+            self.file_paths.clear()
+            self.update_listbox()
+
+    # Função para habilitar/desabilitar botões durante a compilação
+    def toggle_controls(self, state="normal"):
+        """Altera o estado de todos os botões."""
+        self.btn_add.configure(state=state)
+        self.btn_remove.configure(state=state)
+        self.btn_up.configure(state=state)
+        self.btn_down.configure(state=state)
+        self.btn_clear.configure(state=state)
+        self.btn_compile.configure(state=state)
+
+    # Esta função agora APENAS inicia a thread
+    def start_merge_thread(self):
+        """Inicia o processo de compilação em uma thread separada para não travar a UI."""
         if len(self.file_paths) < 2:
             messagebox.showwarning("Aviso", "Você precisa de pelo menos 2 arquivos para compilar.")
             return
 
-        # Pede ao usuário onde salvar o arquivo final
         output_path = filedialog.asksaveasfilename(
             title="Salvar PDF compilado como...",
             defaultextension=".pdf",
             filetypes=[("Arquivos PDF", "*.pdf")]
         )
 
-        # Se o usuário cancelar a janela de salvar, não faz nada
         if not output_path:
             return
 
-        # Cria o objeto que fará a união
-        merger = PdfWriter()
-        
-        try:
-            # Adiciona cada PDF da lista (na ordem correta) ao objeto merger
-            for pdf_path in self.file_paths:
-                merger.append(pdf_path)
+        # Desabilita os botões e atualiza o texto para dar feedback ao usuário
+        self.toggle_controls(state="disabled")
+        self.btn_compile.configure(text="Compilando...")
 
-            # Escreve o arquivo final no disco
+        # Cria e inicia a thread, passando a função de compilação e seus argumentos
+        merge_thread = threading.Thread(
+            target=self.merge_pdfs_worker, 
+            args=(self.file_paths.copy(), output_path)
+        )
+        merge_thread.start()
+
+    # Esta é a função que roda na thread separada
+    def merge_pdfs_worker(self, file_paths, output_path):
+        """Pega a lista de arquivos e os compila. Executado em segundo plano."""
+        try:
+            merger = PdfWriter()
+            for pdf_path in file_paths:
+                merger.append(pdf_path)
+            
             merger.write(output_path)
             merger.close()
             
-            messagebox.showinfo("Sucesso", f"PDFs compilados com sucesso!\n\nSalvo em: {output_path}")
+            # As chamadas de messagebox devem ser feitas na thread principal
+            # self.after(0, ...) agenda a execução da função na thread principal
+            self.after(0, lambda: messagebox.showinfo("Sucesso", f"PDFs compilados com sucesso!\n\nSalvo em: {output_path}"))
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Ocorreu um erro ao compilar os PDFs:\n\n{e}")
+            self.after(0, lambda: messagebox.showerror("Erro", f"Ocorreu um erro ao compilar os PDFs:\n\n{e}"))
+
+        finally:
+            # Independentemente de sucesso ou erro, reabilita os botões na thread principal
+            self.after(0, self.toggle_controls, "normal")
+            self.after(0, lambda: self.btn_compile.configure(text="Compilar PDFs e Salvar"))
+
 
 # --- Ponto de Entrada da Aplicação ---
 if __name__ == "__main__":
